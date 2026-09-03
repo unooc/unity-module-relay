@@ -15,39 +15,17 @@ jobs:
     steps:
       - name: Discover real module URL from Unity official index
         run: |
-          set -e
-          echo "Fetching Unity Hub release manifest ..."
           curl -fsSL --retry 3 --retry-delay 5 -o rel.json \
             "https://public-cdn.cloud.unity3d.com/hub/prod/releases.json"
           ls -lh rel.json
-          python3 - <<'PY'
-import json
-data = json.load(open('rel.json'))
-urls = []
-def walk(o):
-    if isinstance(o, dict):
-        if 'downloadUrl' in o and isinstance(o['downloadUrl'], str):
-            urls.append(o['downloadUrl'])
-        for v in o.values():
-            walk(v)
-    elif isinstance(o, list):
-        for v in o:
-            walk(v)
-walk(data)
-cand = [u for u in urls if '2019.3.13f1' in u]
-print('total downloadUrls:', len(urls))
-print('urls mentioning 2019.3.13f1:', len(cand))
-for u in cand:
-    print('  ', u)
-pick = [u for u in cand if ('UWP-IL2CPP' in u) or ('IL2CPP-Support' in u)]
-if pick:
-    print('SELECTED=', pick[0])
-    open('module_url.txt', 'w').write(pick[0] + '\n')
-else:
-    print('NO_MATCH - cannot find UWP-IL2CPP module url for 2019.3.13f1')
-    raise SystemExit(2)
-PY
-          cat module_url.txt
+          jq -r '.. | objects | select(has("downloadUrl")) | .downloadUrl | strings | select(contains("2019.3.13f1"))' rel.json | tee candidates.txt
+          grep -E 'UWP-IL2CPP|IL2CPP-Support' candidates.txt | head -n1 > module_url.txt
+          if [ ! -s module_url.txt ]; then
+            echo "NO_MATCH found, candidates were:"
+            cat candidates.txt
+            exit 2
+          fi
+          echo "SELECTED: $(cat module_url.txt)"
 
       - name: Download module
         run: |
