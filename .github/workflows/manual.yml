@@ -13,24 +13,57 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - name: Discover real module URL from Unity official index
+      - name: Probe official candidate URLs
         run: |
-          curl -fsSL --retry 3 --retry-delay 5 -o rel.json \
-            "https://public-cdn.cloud.unity3d.com/hub/prod/releases.json"
-          ls -lh rel.json
-          jq -r '.. | objects | select(has("downloadUrl")) | .downloadUrl | strings | select(contains("2019.3.13f1"))' rel.json | tee candidates.txt
-          grep -E 'UWP-IL2CPP|IL2CPP-Support' candidates.txt | head -n1 > module_url.txt
-          if [ ! -s module_url.txt ]; then
-            echo "NO_MATCH found, candidates were:"
-            cat candidates.txt
-            exit 2
-          fi
-          echo "SELECTED: $(cat module_url.txt)"
+          BASE="https://download.unity3d.com/download_unity/e4c6bad08822"
+          urls=(
+            "$BASE/WindowsEditorTargetInstaller/UnitySetup-UWP-IL2CPP-Support-for-Editor-2019.3.13f1.exe"
+            "$BASE/TargetSupportInstaller/UnitySetup-UWP-IL2CPP-Support-for-Editor-2019.3.13f1.exe"
+            "$BASE/WindowsEditorTargetInstaller/UnitySetup-UWP-.NET-Support-for-Editor-2019.3.13f1.exe"
+            "$BASE/TargetSupportInstaller/UnitySetup-UWP-.NET-Support-for-Editor-2019.3.13f1.exe"
+            "$BASE/WindowsEditorTargetInstaller/UnitySetup-Windows-IL2CPP-Support-for-Editor-2019.3.13f1.exe"
+            "$BASE/TargetSupportInstaller/UnitySetup-Windows-IL2CPP-Support-for-Editor-2019.3.13f1.exe"
+            "$BASE/WindowsEditorTargetInstaller/UnitySetup-Windows-Mono-Support-for-Editor-2019.3.13f1.exe"
+            "$BASE/TargetSupportInstaller/UnitySetup-Windows-Mono-Support-for-Editor-2019.3.13f1.exe"
+            "$BASE/Windows64EditorInstaller/UnitySetup64-2019.3.13f1.exe"
+          )
+          : > hits.txt
+          for u in "${urls[@]}"; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -I -L --max-time 40 "$u")
+            echo "$code  $u"
+            if [ "$code" = "200" ]; then echo "$u" >> hits.txt; fi
+          done
+          echo "=== HITS ==="
+          cat hits.txt
+
+      - name: Fallback - discover via Hub manifest
+        run: |
+          if [ -s hits.txt ]; then echo "already have a hit, skip"; exit 0; fi
+          echo "trying hub manifests ..."
+          : > module_url.txt
+          for mf in releases.json releases-win32.json releases-darwin.json releases-linux.json; do
+            url="https://public-cdn.cloud.unity3d.com/hub/prod/$mf"
+            code=$(curl -s -o rel.json -w "%{http_code}" -L --max-time 60 "$url")
+            echo "manifest $mf -> $code ($(stat -c%s rel.json 2>/dev/null) bytes)"
+            if [ "$code" = "200" ]; then
+              jq -r '.. | objects | select(has("downloadUrl")) | .downloadUrl | strings | select(contains("2019.3.13f1"))' rel.json > cand.txt
+              grep -E 'UWP-IL2CPP|IL2CPP-Support' cand.txt | head -n1 > module_url.txt
+              if [ -s module_url.txt ]; then echo "FOUND via $mf: $(cat module_url.txt)"; break; fi
+            fi
+          done
+          if [ ! -s module_url.txt ]; then echo "no module url found via manifests"; exit 0; fi
 
       - name: Download module
         run: |
           set -e
-          URL=$(cat module_url.txt)
+          if [ -s hits.txt ]; then
+            URL=$(head -n1 hits.txt)
+          elif [ -s module_url.txt ]; then
+            URL=$(cat module_url.txt)
+          else
+            echo "no candidate URL found at all"
+            exit 2
+          fi
           echo "downloading: $URL"
           curl -fL --retry 3 --retry-delay 5 -o module.exe "$URL"
           ls -lh module.exe
@@ -49,5 +82,5 @@ jobs:
           TAG="hl1-uwp-module-$(date +%Y%m%d-%H%M%S)"
           gh release create "$TAG" module.exe \
             --title "Unity 2019.3.13f1 UWP-IL2CPP Support module" \
-            --notes "官方安装包（Unity 官方清单中查到的地址）。下载后请与 Actions 日志中的 sha256 比对。"
+            --notes "官方安装包。下载后请与 Actions 日志中的 sha256 比对。"
           echo "release tag: $TAG"
