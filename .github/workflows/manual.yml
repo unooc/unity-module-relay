@@ -71,11 +71,11 @@ jobs:
         run: |
           TAG="probe-$(date +%Y%m%d-%H%M%S)"
           if [ -s module.exe ]; then
-            gh release create "$TAG" module.exe probe_results.txt \
+            gh release create -R "$GITHUB_REPOSITORY" "$TAG" module.exe probe_results.txt \
               --title "Unity 2019.3.13f1 UWP module - probe $(date +%H:%M)" \
               --notes "probe_results.txt contains status of each candidate URL."
           else
-            gh release create "$TAG" probe_results.txt \
+            gh release create -R "$GITHUB_REPOSITORY" "$TAG" probe_results.txt \
               --title "Unity 2019.3.13f1 UWP module - probe $(date +%H:%M)" \
               --notes "No module downloaded yet; probe_results.txt contains status of each candidate URL."
           fi
