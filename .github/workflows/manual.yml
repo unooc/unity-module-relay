@@ -1,0 +1,36 @@
+name: Fetch Unity UWP Module
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download official module from Unity intl CDN
+        run: |
+          URL="https://download.unity3d.com/download_unity/e4c6bad08822/WindowsEditorTargetInstaller/UnitySetup-UWP-IL2CPP-Support-for-Editor-2019.3.13f1.exe"
+          curl -fL --retry 3 --retry-delay 5 -o module.exe "$URL"
+          echo "=== file info ==="
+          ls -lh module.exe
+          file module.exe
+          echo "=== sha256 ==="
+          sha256sum module.exe
+          SZ=$(stat -c%s module.exe)
+          echo "size_bytes=$SZ"
+          head -c 2 module.exe | od -An -tx1 | grep -qi "4d 5a" || { echo "NOT a PE file!"; exit 1; }
+          if [ "$SZ" -lt 100000000 ]; then echo "too small, abort"; exit 1; fi
+
+      - name: Create GitHub Release and upload asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="hl1-uwp-module-$(date +%Y%m%d-%H%M%S)"
+          gh release create "$TAG" module.exe \
+            --title "Unity 2019.3.13f1 UWP-IL2CPP Support module" \
+            --notes "官方安装包（download.unity3d.com 原文件）。下载后请与 Actions 日志中的 sha256 比对。"
+          echo "release tag: $TAG"
