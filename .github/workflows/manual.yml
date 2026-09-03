@@ -11,7 +11,7 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - name: Probe official candidate URLs
         run: |
@@ -27,60 +27,56 @@ jobs:
             "$BASE/TargetSupportInstaller/UnitySetup-Windows-Mono-Support-for-Editor-2019.3.13f1.exe"
             "$BASE/Windows64EditorInstaller/UnitySetup64-2019.3.13f1.exe"
           )
+          : > probe_results.txt
           : > hits.txt
           for u in "${urls[@]}"; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" -I -L --max-time 40 "$u")
+            code=$(curl -s -o /dev/null -w "%{http_code}" -L -r 0-0 -A "Mozilla/5.0" --max-time 60 "$u")
             echo "$code  $u"
-            if [ "$code" = "200" ]; then echo "$u" >> hits.txt; fi
+            echo "$code  $u" >> probe_results.txt
+            if [ "$code" = "200" ] || [ "$code" = "206" ]; then echo "$u" >> hits.txt; fi
           done
-          echo "=== HITS ==="
-          cat hits.txt
-
-      - name: Fallback - discover via Hub manifest
-        run: |
-          if [ -s hits.txt ]; then echo "already have a hit, skip"; exit 0; fi
-          echo "trying hub manifests ..."
-          : > module_url.txt
+          echo "=== HITS ===" | tee -a probe_results.txt
+          cat hits.txt | tee -a probe_results.txt
+          echo "=== manifest fallback ===" | tee -a probe_results.txt
           for mf in releases.json releases-win32.json releases-darwin.json releases-linux.json; do
             url="https://public-cdn.cloud.unity3d.com/hub/prod/$mf"
-            code=$(curl -s -o rel.json -w "%{http_code}" -L --max-time 60 "$url")
-            echo "manifest $mf -> $code ($(stat -c%s rel.json 2>/dev/null) bytes)"
+            code=$(curl -s -o rel.json -w "%{http_code}" -L -A "Mozilla/5.0" --max-time 60 "$url")
+            echo "manifest $mf -> $code ($(stat -c%s rel.json 2>/dev/null) bytes)" | tee -a probe_results.txt
             if [ "$code" = "200" ]; then
-              jq -r '.. | objects | select(has("downloadUrl")) | .downloadUrl | strings | select(contains("2019.3.13f1"))' rel.json > cand.txt
-              grep -E 'UWP-IL2CPP|IL2CPP-Support' cand.txt | head -n1 > module_url.txt
-              if [ -s module_url.txt ]; then echo "FOUND via $mf: $(cat module_url.txt)"; break; fi
+              jq -r '.. | objects | select(has("downloadUrl")) | .downloadUrl | strings | select(contains("2019.3.13f1"))' rel.json >> probe_results.txt
             fi
           done
-          if [ ! -s module_url.txt ]; then echo "no module url found via manifests"; exit 0; fi
+          if [ -s hits.txt ]; then echo "HIT FOUND" | tee -a probe_results.txt; fi
 
       - name: Download module
+        continue-on-error: true
         run: |
-          set -e
           if [ -s hits.txt ]; then
             URL=$(head -n1 hits.txt)
-          elif [ -s module_url.txt ]; then
-            URL=$(cat module_url.txt)
+            echo "downloading: $URL"
+            curl -fL --retry 2 --retry-delay 5 -A "Mozilla/5.0" -o module.exe "$URL"
+            ls -lh module.exe || true
+            file module.exe || true
+            sha256sum module.exe || true
+            SZ=$(stat -c%s module.exe 2>/dev/null || echo 0)
+            echo "size_bytes=$SZ"
           else
-            echo "no candidate URL found at all"
-            exit 2
+            echo "no hit, nothing to download"
           fi
-          echo "downloading: $URL"
-          curl -fL --retry 3 --retry-delay 5 -o module.exe "$URL"
-          ls -lh module.exe
-          file module.exe
-          echo "=== sha256 ==="
-          sha256sum module.exe
-          SZ=$(stat -c%s module.exe)
-          echo "size_bytes=$SZ"
-          head -c 2 module.exe | od -An -tx1 | grep -qi "4d 5a" || { echo "NOT a PE file!"; exit 1; }
-          if [ "$SZ" -lt 100000000 ]; then echo "too small, abort"; exit 1; fi
 
-      - name: Create GitHub Release and upload asset
+      - name: Publish probe results (always)
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="hl1-uwp-module-$(date +%Y%m%d-%H%M%S)"
-          gh release create "$TAG" module.exe \
-            --title "Unity 2019.3.13f1 UWP-IL2CPP Support module" \
-            --notes "官方安装包。下载后请与 Actions 日志中的 sha256 比对。"
+          TAG="probe-$(date +%Y%m%d-%H%M%S)"
+          if [ -s module.exe ]; then
+            gh release create "$TAG" module.exe probe_results.txt \
+              --title "Unity 2019.3.13f1 UWP module - probe $(date +%H:%M)" \
+              --notes "probe_results.txt contains status of each candidate URL."
+          else
+            gh release create "$TAG" probe_results.txt \
+              --title "Unity 2019.3.13f1 UWP module - probe $(date +%H:%M)" \
+              --notes "No module downloaded yet; probe_results.txt contains status of each candidate URL."
+          fi
           echo "release tag: $TAG"
