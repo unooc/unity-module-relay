@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Query Wayback CDX for files under hash e4c6bad08822
+      - name: Wayback CDX prefix queries for candidate hashes
         run: |
           : > cdx_all.txt
-          for host in "download.unity3d.com/download_unity/e4c6bad08822" "download.unitychina.cn/download_unity/e4c6bad08822"; do
+          for host in "download.unity3d.com/download_unity/ffc62b691db5" "download.unity3d.com/download_unity/b805b124c6b7" "download.unitychina.cn/download_unity/ffc62b691db5" "download.unitychina.cn/download_unity/b805b124c6b7"; do
             echo "== $host ==" >> cdx_all.txt
             curl -sG "https://web.archive.org/cdx/search/cdx" \
               --data-urlencode "url=$host" \
@@ -28,31 +28,31 @@ jobs:
             jq -r '.[] | select(.[0] != "original") | "\(.[0])  \(.[1])  \(.[2])"' cdx.json >> cdx_all.txt
           done
           echo "cdx lines: $(wc -l < cdx_all.txt)"
-          head -n 60 cdx_all.txt
+          cat cdx_all.txt
 
-      - name: Fetch archived release manifests and extract candidate URLs
+      - name: Fetch archived manifest and dump ALL module urls for target versions
         run: |
           : > manifest_lines.txt
           for mf in "public-cdn.cloud.unity3d.com/hub/prod/releases-win32.json" "public-cdn.cloud.unity3d.com/hub/prod/releases.json"; do
             curl -sG "https://web.archive.org/cdx/search/cdx" \
               --data-urlencode "url=$mf" \
-              --data-urlencode "from=20200601" \
+              --data-urlencode "from=20220201" \
               --data-urlencode "output=json" \
               --data-urlencode "fl=timestamp,statuscode,length" \
               --data-urlencode "filter=statuscode:200" \
-              --data-urlencode "limit=200" -o mf.json
+              --data-urlencode "limit=100" -o mf.json
             ts=$(jq -r '.[] | select(.[0] != "timestamp") | .[0]' mf.json | sort -r | head -n1)
             echo "manifest=$mf ts=$ts"
             if [ -n "$ts" ] && [ "$ts" != "null" ]; then
               curl -sL "https://web.archive.org/web/${ts}id_/${mf}" -o relbig.json
               echo "relbig bytes: $(stat -c%s relbig.json 2>/dev/null || echo 0)"
-              jq -r '.. | objects | select(has("downloadUrl")) | .downloadUrl | strings | select(contains("2019.3.13f1") or (contains("2019.4.") and contains("IL2CPP")) or (contains("2020.3.") and contains("IL2CPP")))' relbig.json >> manifest_lines.txt
+              jq -r '.. | objects | select(has("downloadUrl")) | .downloadUrl | strings | select((contains("2019.4.40f1") or contains("2020.3.48f1") or contains("2019.3.13f1")) and contains("Windows"))' relbig.json | sort -u >> manifest_lines.txt
             fi
           done
           echo "manifest lines: $(wc -l < manifest_lines.txt)"
           cat cdx_all.txt > probe_results.txt
-          echo "=== MANIFEST CANDIDATES ===" >> probe_results.txt
-          sort -u manifest_lines.txt >> probe_results.txt
+          echo "=== MANIFEST WINDOWS MODULE URLS ===" >> probe_results.txt
+          cat manifest_lines.txt >> probe_results.txt
 
       - name: Publish results
         env:
@@ -61,5 +61,5 @@ jobs:
           TAG="wb-$(date +%Y%m%d-%H%M%S)"
           gh release create -R "$GITHUB_REPOSITORY" "$TAG" probe_results.txt \
             --title "Wayback probe $(date +%H:%M)" \
-            --notes "module filename candidates found via Wayback."
+            --notes "all module urls for target versions."
           echo "release tag: $TAG"
