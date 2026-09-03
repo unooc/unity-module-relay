@@ -9,13 +9,50 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
-      - name: Download official module from Unity intl CDN
+      - name: Discover real module URL from Unity official index
         run: |
-          URL="https://download.unity3d.com/download_unity/e4c6bad08822/WindowsEditorTargetInstaller/UnitySetup-UWP-IL2CPP-Support-for-Editor-2019.3.13f1.exe"
+          set -e
+          echo "Fetching Unity Hub release manifest ..."
+          curl -fsSL --retry 3 --retry-delay 5 -o rel.json \
+            "https://public-cdn.cloud.unity3d.com/hub/prod/releases.json"
+          ls -lh rel.json
+          python3 - <<'PY'
+import json
+data = json.load(open('rel.json'))
+urls = []
+def walk(o):
+    if isinstance(o, dict):
+        if 'downloadUrl' in o and isinstance(o['downloadUrl'], str):
+            urls.append(o['downloadUrl'])
+        for v in o.values():
+            walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            walk(v)
+walk(data)
+cand = [u for u in urls if '2019.3.13f1' in u]
+print('total downloadUrls:', len(urls))
+print('urls mentioning 2019.3.13f1:', len(cand))
+for u in cand:
+    print('  ', u)
+pick = [u for u in cand if ('UWP-IL2CPP' in u) or ('IL2CPP-Support' in u)]
+if pick:
+    print('SELECTED=', pick[0])
+    open('module_url.txt', 'w').write(pick[0] + '\n')
+else:
+    print('NO_MATCH - cannot find UWP-IL2CPP module url for 2019.3.13f1')
+    raise SystemExit(2)
+PY
+          cat module_url.txt
+
+      - name: Download module
+        run: |
+          set -e
+          URL=$(cat module_url.txt)
+          echo "downloading: $URL"
           curl -fL --retry 3 --retry-delay 5 -o module.exe "$URL"
-          echo "=== file info ==="
           ls -lh module.exe
           file module.exe
           echo "=== sha256 ==="
@@ -32,5 +69,5 @@ jobs:
           TAG="hl1-uwp-module-$(date +%Y%m%d-%H%M%S)"
           gh release create "$TAG" module.exe \
             --title "Unity 2019.3.13f1 UWP-IL2CPP Support module" \
-            --notes "官方安装包（download.unity3d.com 原文件）。下载后请与 Actions 日志中的 sha256 比对。"
+            --notes "官方安装包（Unity 官方清单中查到的地址）。下载后请与 Actions 日志中的 sha256 比对。"
           echo "release tag: $TAG"
